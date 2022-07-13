@@ -11,11 +11,11 @@ class Results(object):
 
     @property
     def succeeded(self):
-        return self.out == 0
+        return self.rc == 0
 
     @property 
-    def faled(self):
-        return not self.succeeded
+    def failed(self):
+        return self.rc != 0
 
 def run(cmd):
     try:
