@@ -1,0 +1,130 @@
+#!/usr/bin/env python
+
+import getpass
+import os
+import subprocess
+import sys
+
+
+def run(cmd):
+    subproc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    (out, err) = subproc.communicate()
+    rc = subproc.returncode
+    return out, err, rc 
+
+
+class SandboxCreationFailure(Exception):
+    def __init__(self, sandbox_name):
+        msg = "Attempt to create Sandbox {sandbox_name} failed."
+        self.value = msg.format(sandbox_name=sandbox_name)
+    def __str__(self):
+        return repr(self.value)
+
+
+class HostHandlingFailure(Exception):
+    def __init__(self, host_name):
+        msg = "Attempt to handle Host {host_name} failed."
+        self.value = msg.format(host_name=host_name)
+    def __str__(self):
+        return repr(self.value)
+
+
+class GitCommitFailure(Exception):
+    def __init__(self, err_msg):
+        msg = "Attempt to git commit failed with error message: {error_msg}"
+        self.value = msg.format(err_msg=err_msg)
+    def __str__(self):
+        return repr(self.value)
+
+
+class AquilonWorkflow(object):
+    """
+    base class to perform an atomic
+    operation within Aquilon
+    """
+
+    def __init__(self):
+        self.sandbox_name = None
+        self.hostname_l = []
+        self.git_message = None
+
+    def create_sandbox(self):
+        """
+        if it does not exist yet, creates a Sandbox
+        """
+        print('Creating Sandbox with name %s' %self.sandbox_name)
+        out, err, rc = run('aq add_sandbox --sandbox %s' %self.sandbox_name)
+        if rc != 0:
+            print('Failed creating Sandbox %s.' %self.sandbox_name)
+            print('Error message = %s' %err)
+            print('Aborting.')
+            raise SandboxCreationFailure(self.sandbox_name)
+        else:
+            print('Sandbox with name %s created' %self.sandbox_name)
+
+    def handle_host_l(self):
+        """
+        manage Hosts into the Sandbox and recompile them
+        """
+        print('Start handling Hosts')
+        for hostname in self.hostname_l:
+            rc = self._handle_host(hostname)
+            if rc != 0:
+                print('Handling Host %s failed. Aborting' %hostname)
+                raise HostHandlingFailure(hostname)
+        print('All Hosts handled')
+
+    def _handle_host(self, hostname):
+        """
+        if it is in Domain 'prod',
+        manage a single Host into the Sandbox and recompile it
+        """
+        print('Start handling Host %s' %hostname)
+        print('Managing Host %s into Sandbox %s' %(hostname, self.sandbox_name))
+        out, err, rc = run('aq manage --hostname %s --sandbox %s/%s' %(hostname, getpass.getuser(), self.sandbox_name))
+        if rc != 0:
+            print('Host %s is not in a Domain. Skipping it' %hostname)
+        else:
+            print('Host %s managed into Sandbox %s' %(hostname, self.sandbox_name))
+            print('Compiling Host %s' %hostname)
+            out, err, rc = run('aq make --hostname %s' %hostname)
+            if rc == 0:
+                print('Compiling Host %s succeeded' %hostname)
+                return 0
+            else:
+                print('Compiling Host %s failed' %hostname)
+                return 1
+
+    def git_commit(self):
+        """
+        commit the changes
+        """
+        print('Commiting the changes with message: %s' %self.git_message)
+        cmd = 'git commit -a -m "%s"' %self.git_message
+        out, err, rc = run(cmd)
+        if rc == 0:
+            print('Changes committed successfully')
+        else:
+            print('Committing changes failed')
+            print('Stdout:')
+            print(out)
+            print('Stderr:')
+            print(err)
+            print('Aborting')
+            raise GitCommitFailure(err)
+
+    def publish(self):
+        print('Publishing Sandbox')
+        cmd = 'cd %s; aq publish --sandbox %s --rebase' %(self.path, self.sandbox_name)
+        out, err, rc = run(cmd)
+        print('Sandbox published: http://aquilon.gridpp.rl.ac.uk/sandboxes/diff.php?sandbox=%s' %self.sandbox_name)
+
+    def change(self):
+        raise NotImplementedError
+
+    def run(self):
+        self.create_sandbox()
+        self.change()
+        self.handle_host_l()
+        self.git_commit()
+        self.publish()
